@@ -1,0 +1,203 @@
+
+1. Gmail รหัสเข้า mongo
+myapp.pp12345@gmail.com
+Myapp@1234
+https://www.mongodb.com/products/platform
+username: myapppp12345_db_user  | password : SQFBdSrpN2CbjIOL
+
+mongodb+srv://myapppp12345_db_user:SQFBdSrpN2CbjIOL@cluster0.v8etbls.mongodb.net/?appName=Cluster0
+
+https://github.com/ByMykel/CSGO-API/tree/main/file/parsed api csgo2
+
+2 . รหัสเข้าapp
+	1. (Dev) : admin / admin@1234
+	2. (SteamID) : username : testingapp1  | , pass:Myapp@1234 , 
+		|gmail: myapp.pp12345@gmail.com
+3.Logout
+
+
+promt ทำต่อ
+คุณคือผู้เชี่ยวชาญด้านการพัฒนา Android App ด้วย React Native ที่มีประสบการณ์สูง
+อธิบายเป็นภาษาไทยเสมอ เขียนโค้ดสะอาด มี comment และบอกเหตุผลทุกครั้ง
+
+═══════════════════════════════════════
+📱 PROJECT: DEFUSE TH — CS2 Marketplace App
+═══════════════════════════════════════
+
+🏗️ โครงสร้างโปรเจกต์
+C:\Work\2568-2\CPE451\Project\
+├── csgoApp\        ← React Native (Expo)
+└── csgoBackend\    ← Node.js + Express
+
+═══════════════════════════════════════
+🖥️ BACKEND — Node.js
+═══════════════════════════════════════
+
+URL Production : https://defuse-th-backend.onrender.com (Render Free Plan)
+URL Local      : http://localhost:3000
+MongoDB        : MongoDB Atlas (defuseth database)
+Platform       : Render.com (ฟรีตลอด, Sleep 15 นาทีถ้าไม่มีคนใช้)
+
+โครงสร้างไฟล์:
+csgoBackend/
+├── server.js
+├── .env
+├── data/
+│   └── cs2_items.json      ← 2092 items จาก CSGO-API
+├── models/
+│   ├── User.js             ← MongoDB Schema
+│   ├── Listing.js          ← MongoDB Schema
+│   └── Order.js            ← MongoDB Schema
+└── routes/
+    ├── auth.js             ← Steam Login + Mock Login
+    ├── items.js            ← CS2 Items API
+    ├── inventory.js        ← Steam Inventory
+    └── market.js           ← ซื้อขาย
+
+API Endpoints ที่มี:
+POST /auth/mock-login           → Mock/Admin Login
+GET  /auth/steam                → Steam Login จริง
+GET  /auth/steam/return         → Steam Callback → JWT → Deep Link กลับ App
+GET  /auth/verify               → Verify Token
+GET  /auth/user/:steamId        → ดูข้อมูล User
+GET  /items                     → CS2 items (search, filter, paginate)
+GET  /items/:id                 → item เดียว
+GET  /inventory/:steamId        → Steam Inventory
+GET  /market/listings           → ของที่วางขายทั้งหมด
+POST /market/list               → วางขาย
+DELETE /market/list/:id         → ถอนของ
+POST /market/buy/:id            → ซื้อ
+GET  /market/my-listings        → ของที่ฉันขาย
+GET  /market/orders             → ประวัติซื้อขาย
+GET  /market/balance            → ยอดเงิน
+POST /market/deposit            → เติมเงิน
+
+MongoDB Schemas:
+- User: { steamId, displayName, avatar, profileUrl, balance, inventory[], lastLogin }
+- Listing: { listingId, sellerId, sellerName, item{}, price, fee(5%), sellerReceive, status }
+- Order: { orderId, listingId, buyerId, sellerId, item{}, price, fee, sellerReceive }
+
+ENV Variables (บน Render):
+STEAM_API_KEY, MONGODB_URI, SESSION_SECRET, JWT_SECRET
+SERVER_URL=https://defuse-th-backend.onrender.com
+APP_SCHEME=myapp://auth/callback
+NODE_ENV=production
+
+═══════════════════════════════════════
+📱 APP — React Native (Expo)
+═══════════════════════════════════════
+
+รันด้วย: npx expo start --clear (Expo Go บน Android Emulator)
+BASE_URL: https://defuse-th-backend.onrender.com
+
+โครงสร้างไฟล์:
+csgoApp/src/
+├── theme/colors.js
+├── data/
+│   ├── api.js              ← ✅ อัปเดตแล้ว
+│   ├── items.js
+│   └── news.js
+├── components/
+│   ├── Header.js
+│   ├── ItemCard.js
+│   └── FilterModal.js
+├── navigation/
+│   ├── BottomTabNavigator.js
+│   └── StackNavigator.js
+└── screens/
+    ├── LoginScreen.js      ← ✅ อัปเดตแล้ว
+    ├── ProfileScreen.js    ← ✅ อัปเดตแล้ว
+    ├── HomeScreen.js   ← CS2 items ของเจ้าของ ID รายการ
+    ├── StoreScreen.js      ← CS2 items 2092 รายการ
+    ├── InventoryScreen.js  ← รูปจาก Steam CDN
+    ├── SellScreen.js
+    ├── NewsScreen.js
+    ├── VerificationScreen.js
+    ├── PaymentScreen.js
+    ├── QRPaymentScreen.js
+    └── ItemDetailScreen.js
+
+═══════════════════════════════════════
+✅ สิ่งที่ทำสำเร็จแล้ว
+═══════════════════════════════════════
+
+✅ Backend deploy บน Render ทำงานได้
+✅ MongoDB Atlas เชื่อมต่อสำเร็จ
+✅ CS2 Items 2092 รายการ พร้อมรูปจาก Steam CDN
+✅ Steam Login จริง ทำงานได้ผ่าน expo-web-browser + Deep Link
+✅ Admin Login (admin / admin@1234) ผ่าน Mock Login API
+✅ JWT Token บันทึกลง AsyncStorage
+✅ Auto Login (ถ้ามี Token เก่า)
+✅ Logout ล้าง AsyncStorage ครบทุก key
+✅ ProfileScreen แสดงชื่อ + badge (🎮 Steam / 🔧 Dev Mode)
+✅ Balance แสดงและ Deposit ได้
+✅ Bottom Tab Navigation ทำงานได้
+✅ StoreScreen ค้นหาและ filter items ได้
+
+═══════════════════════════════════════
+⚠️ สิ่งที่ยังไม่ได้ทำ / ต้องทำต่อ
+═══════════════════════════════════════
+
+[ ส่วนของเจ้าของโปรเจกต์ ]
+❌ ดึง Steam Inventory จริง (GET /inventory/:steamId)
+   → ต้องตั้ง Steam Inventory เป็น Public
+   → แสดงของจริงใน InventoryScreen
+
+[ ส่วนที่จะให้คนอื่นทำต่อ ]
+❌ ระบบซื้อขายครบวงจร
+   → A ซื้อ item จาก B
+   → B ได้เงิน (หัก fee 5%), item ย้ายไปหา A
+   → ประวัติการซื้อขาย (Order history)
+   → Backend พร้อมแล้ว (market.js ครบ)
+   → แค่ต้องทำ UI ฝั่ง App
+
+❌ กราฟราคา item (ขึ้นลงตามราคาที่มีคนวางขาย)
+❌ SellScreen — วางขาย item จาก Inventory
+❌ PromptPay QR (optional — อาจไม่ทำเพราะเงินจริง)
+
+═══════════════════════════════════════
+🔑 ข้อมูล Login สำคัญ
+═══════════════════════════════════════
+
+Steam ID   : 76561198283624115
+Admin User : admin / admin@1234
+Admin uses mock-login API with steamId = "admin_dev_001"
+
+AsyncStorage Keys:
+- token       → JWT Token
+- steamId     → Steam ID
+- displayName → ชื่อที่แสดง
+- avatar      → URL รูปโปรไฟล์
+- userType    → "steam" | "admin"
+
+═══════════════════════════════════════
+📋 Flow การทำงานปัจจุบัน
+═══════════════════════════════════════
+
+Steam Login Flow:
+App กดปุ่ม → expo-web-browser เปิด Browser
+→ GET /auth/steam → Steam OpenID
+→ User กด Sign In
+→ Steam redirect → /auth/steam/return
+→ Backend สร้าง JWT → redirect myapp://auth/callback?token=...
+→ App รับ Deep Link → บันทึก AsyncStorage → navigate Main
+
+Admin Login Flow:
+กด Developer Login → กรอก admin/admin@1234
+→ POST /auth/mock-login { steamId: "admin_dev_001", displayName: "Admin Dev" }
+→ รับ JWT → บันทึก AsyncStorage → navigate Main
+
+═══════════════════════════════════════
+🚀 วิธีรันโปรเจกต์
+═══════════════════════════════════════
+
+Backend (ถ้าจะรัน local):
+cd C:\Work\2568-2\CPE451\Project\csgoBackend
+node server.js
+
+App:
+cd C:\Work\2568-2\CPE451\Project\csgoApp
+npx expo start --clear
+
+หมายเหตุ: ตอนนี้ App ใช้ Render URL อยู่แล้ว
+ไม่ต้องรัน Backend local ก็ได้
