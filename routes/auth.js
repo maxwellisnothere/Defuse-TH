@@ -21,14 +21,20 @@ passport.use(
         await User.findOneAndUpdate(
           { steamId },
           {
-            steamId,
-            displayName: profile.displayName,
-            avatar:
-              profile.photos?.[2]?.value || profile.photos?.[0]?.value || "",
-            profileUrl: profile._json?.profileurl || "",
-            lastLogin: new Date(),
+            $set: {
+              displayName: profile.displayName,
+              avatar:
+                profile.photos?.[2]?.value || profile.photos?.[0]?.value || "",
+              profileUrl: profile._json?.profileurl || "",
+              lastLogin: new Date(),
+            },
+            $setOnInsert: {
+              steamId, // เซ็ตแค่ตอนสร้างครั้งแรก
+              balance: 0,
+              inventory: [],
+            },
           },
-          { upsert: true, returnDocument: "after" },
+          { upsert: true, new: true }, // <-- Mongoose ใช้ new: true
         );
         return done(null, profile);
       } catch (err) {
@@ -109,12 +115,18 @@ router.post("/mock-login", async (req, res) => {
     await User.findOneAndUpdate(
       { steamId: mockSteamId },
       {
-        steamId: mockSteamId,
-        displayName: mockName,
-        avatar: "",
-        lastLogin: new Date(),
+        $set: {
+          displayName: mockName,
+          avatar: "",
+          lastLogin: new Date(),
+        },
+        $setOnInsert: {
+          steamId: mockSteamId,
+          balance: 0,
+          inventory: [],
+        },
       },
-      { upsert: true, returnDocument: "after" },
+      { upsert: true, new: true },
     );
 
     const token = jwt.sign(
