@@ -18,7 +18,9 @@ passport.use(
     async (identifier, profile, done) => {
       try {
         const steamId = profile.id;
-        await User.findOneAndUpdate(
+        console.log("🔥 Strategy fired, steamId:", steamId);
+
+        const result = await User.findOneAndUpdate(
           { steamId },
           {
             $set: {
@@ -29,15 +31,19 @@ passport.use(
               lastLogin: new Date(),
             },
             $setOnInsert: {
-              steamId, // เซ็ตแค่ตอนสร้างครั้งแรก
+              steamId,
               balance: 0,
               inventory: [],
             },
           },
-          { upsert: true, new: true }, // <-- Mongoose ใช้ new: true
+          { upsert: true, new: true },
         );
+
+        console.log("✅ upsert result steamId:", result?.steamId);
+        console.log("✅ upsert result _id:", result?._id);
         return done(null, profile);
       } catch (err) {
+        console.error("❌ DB upsert error:", err.message); // ← ดูตรงนี้
         return done(err, null);
       }
     },
