@@ -62,7 +62,7 @@ app.get("/steam/price-history", async (req, res) => {
   const name = req.query.name;
 
   try {
-    const url = https://steamcommunity.com/market/pricehistory/?appid=730&market_hash_name=${encodeURIComponent(name)};
+    const url = `https://steamcommunity.com/market/pricehistory/?appid=730&market_hash_name=${encodeURIComponent(name)}`;
 
     const response = await fetch(url);
     const data = await response.json();
