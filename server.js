@@ -58,3 +58,19 @@ app.listen(PORT, () => {
   console.log(`🏪 Market:  http://localhost:${PORT}/market/listings`);
   console.log(`🔑 Login:   http://localhost:${PORT}/auth/steam\n`);
 });
+
+app.get("/steam/price-history", async (req, res) => {
+  const name = req.query.name;
+
+  try {
+    const url = https://steamcommunity.com/market/pricehistory/?appid=730&market_hash_name=${encodeURIComponent(name)};
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    res.json(data);
+  } catch (err) {
+    console.error("Steam API error:", err);
+    res.status(500).json({ error: "steam fetch error" });
+  }
+});
