@@ -6,7 +6,6 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 const JWT_SECRET = process.env.JWT_SECRET || "defuse_th_jwt_2024";
-const pendingRedirects = new Map(); // state → redirectUri
 // ── Passport Steam Strategy ────────────────────────────
 passport.use(
   new SteamStrategy(
@@ -54,21 +53,17 @@ passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
 // ── GET /auth/steam ────────────────────────────────────
+// ── GET /auth/steam ────────────────────────────────────
 router.get("/steam", (req, res, next) => {
-  // ✅ รับ redirect จาก Frontend แล้วเก็บไว้ก่อน
-  router.get("/steam", (req, res, next) => {
-    const redirectUri = req.query.redirect || "myapp://auth/callback";
+  const redirectUri = req.query.redirect || "myapp://auth/callback";
 
-    // 🔥 เก็บ redirect ไว้ใน session แทน
-    req.session.redirect = redirectUri;
+  // 🔥 encode redirect ลง state
+  const state = Buffer.from(redirectUri).toString("base64");
 
-    passport.authenticate("steam", { session: false })(req, res, next);
-  });
-
-  // ล้าง Map ไม่ให้ leak (หลัง 5 นาที)
-  setTimeout(() => pendingRedirects.delete(state), 5 * 60 * 1000);
-
-  passport.authenticate("steam", { session: false, state })(req, res, next);
+  passport.authenticate("steam", {
+    session: false,
+    state,
+  })(req, res, next);
 });
 
 // ── GET /auth/steam/return ─────────────────────────────
@@ -81,10 +76,16 @@ router.get(
   async (req, res) => {
     try {
       const steamUser = req.user;
-      console.log("🔍 req.query:", req.query);
-      // ✅ ดึง redirectUri ที่เก็บไว้
-      const redirectUri = req.session.redirect || "myapp://auth/callback";
-      pendingRedirects.delete(state); // ใช้แล้วลบทิ้ง
+
+      let redirectUri = "myapp://auth/callback";
+
+      try {
+        if (req.query.state) {
+          redirectUri = Buffer.from(req.query.state, "base64").toString("utf-8");
+        }
+      } catch (e) {
+        console.log("❌ decode state error:", e);
+      }
 
       const token = jwt.sign(
         {
@@ -93,19 +94,20 @@ router.get(
           avatar: steamUser.photos?.[2]?.value || "",
         },
         JWT_SECRET,
-        { expiresIn: "7d" },
+        { expiresIn: "7d" }
       );
 
-      // ✅ redirect ไปยัง URI ที่ Frontend ส่งมา (Deep Link หรือ Expo Proxy)
       const appUrl = `${redirectUri}?token=${token}&steamId=${steamUser.id}&name=${encodeURIComponent(steamUser.displayName)}`;
 
       console.log("✅ Redirecting to:", appUrl);
+
       res.redirect(appUrl);
+
     } catch (err) {
-      console.error("Steam callback error:", err);
-      res.redirect("myapp://auth/callback?error=server_error");
+      console.error("❌ ERROR:", err);
+      res.status(500).send("Server Error");
     }
-  },
+  }
 );
 
 // ── GET /auth/failed ───────────────────────────────────
