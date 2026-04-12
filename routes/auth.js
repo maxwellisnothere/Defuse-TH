@@ -56,9 +56,14 @@ passport.deserializeUser((user, done) => done(null, user));
 // ── GET /auth/steam ────────────────────────────────────
 router.get("/steam", (req, res, next) => {
   // ✅ รับ redirect จาก Frontend แล้วเก็บไว้ก่อน
-  const redirectUri = req.query.redirect || "myapp://auth/callback";
-  const state = Date.now().toString(); // unique key
-  pendingRedirects.set(state, redirectUri);
+  router.get("/steam", (req, res, next) => {
+    const redirectUri = req.query.redirect || "myapp://auth/callback";
+
+    // 🔥 เก็บ redirect ไว้ใน session แทน
+    req.session.redirect = redirectUri;
+
+    passport.authenticate("steam", { session: false })(req, res, next);
+  });
 
   // ล้าง Map ไม่ให้ leak (หลัง 5 นาที)
   setTimeout(() => pendingRedirects.delete(state), 5 * 60 * 1000);
@@ -78,9 +83,7 @@ router.get(
       const steamUser = req.user;
       console.log("🔍 req.query:", req.query);
       // ✅ ดึง redirectUri ที่เก็บไว้
-      const state = req.query.state;
-      const redirectUri =
-        pendingRedirects.get(state) || "myapp://auth/callback";
+      const redirectUri = req.session.redirect || "myapp://auth/callback";
       pendingRedirects.delete(state); // ใช้แล้วลบทิ้ง
 
       const token = jwt.sign(
