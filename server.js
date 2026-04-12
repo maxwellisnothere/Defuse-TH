@@ -51,14 +51,13 @@ app.get('/', (req, res) => {
   });
 });
 
-// ── Start ──────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\n🚀 Defuse TH Backend: http://localhost:${PORT}`);
-  console.log(`🎮 Items:   http://localhost:${PORT}/items`);
-  console.log(`🏪 Market:  http://localhost:${PORT}/market/listings`);
-  console.log(`🔑 Login:   http://localhost:${PORT}/auth/steam\n`);
-});
+// ── Routes ─────────────────────────────────────────────
+app.use('/auth',      authRoutes);
+app.use('/inventory', inventoryRoutes);
+app.use('/market',    marketRoutes);
+app.use('/items',     itemsRoutes);
 
+// ✅ 👉 วางตรงนี้
 app.get("/steam/price-history", async (req, res) => {
   const name = req.query.name;
 
@@ -73,4 +72,14 @@ app.get("/steam/price-history", async (req, res) => {
     console.error("Steam API error:", err);
     res.status(500).json({ error: "steam fetch error" });
   }
+});
+
+// ── Health Check ───────────────────────────────────────
+app.get('/', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// ── Start ──────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(🚀 Server running on ${PORT});
 });
