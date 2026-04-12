@@ -1,85 +1,70 @@
-require('dotenv').config();
-const express   = require('express');
-const session   = require('express-session');
-const passport  = require('passport');
-const cors      = require('cors');
-const mongoose  = require('mongoose');
+const express = require("express");
+const axios = require("axios");
+const cors = require("cors");
 
-const authRoutes      = require('./routes/auth');
-const inventoryRoutes = require('./routes/inventory');
-const marketRoutes    = require('./routes/market');
-const itemsRoutes     = require('./routes/items');
-
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Connect MongoDB ────────────────────────────────────
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB connected!'))
-  .catch(err => console.error('❌ MongoDB error:', err.message));
-
-// ── Middleware ─────────────────────────────────────────
-app.use(cors({ origin: '*', credentials: true }));
+app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'defuse_th_secret',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 },
-}));
-app.use(passport.initialize());
-app.use(passport.session());
 
-// ── Routes ─────────────────────────────────────────────
-app.use('/auth',      authRoutes);
-app.use('/inventory', inventoryRoutes);
-app.use('/market',    marketRoutes);
-app.use('/items',     itemsRoutes);
-
-// ── Health Check ───────────────────────────────────────
-app.get('/', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'Defuse TH Backend 🚀',
-    mongodb: mongoose.connection.readyState === 1 ? '✅ Connected' : '❌ Disconnected',
-    endpoints: {
-      items:   '/items?search=ak&page=1',
-      market:  '/market/listings',
-      auth:    '/auth/steam',
-    },
-  });
-});
-
-// ── Routes ─────────────────────────────────────────────
-app.use('/auth',      authRoutes);
-app.use('/inventory', inventoryRoutes);
-app.use('/market',    marketRoutes);
-app.use('/items',     itemsRoutes);
-
-// ✅ 👉 วางตรงนี้
-app.get("/steam/price-history", async (req, res) => {
-  const name = req.query.name;
-
+/**
+ * 🔥 Endpoint: ดึง price history จาก Steam
+ * ใช้: /price-history?name=AK-47 | Redline (Field-Tested)
+ */
+app.get("/price-history", async (req, res) => {
   try {
-    const url = `https://steamcommunity.com/market/pricehistory/?appid=730&market_hash_name=${encodeURIComponent(name)}`;
+    const { name } = req.query;
 
-    const response = await fetch(url);
-    const data = await response.json();
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing name parameter",
+      });
+    }
 
-    res.json(data);
-  } catch (err) {
-    console.error("Steam API error:", err);
-    res.status(500).json({ error: "steam fetch error" });
+    const url = `https://steamcommunity.com/market/pricehistory/?appid=730&market_hash_name=${encodeURIComponent(
+      name
+    )}`;
+
+    const response = await axios.get(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+      },
+    });
+
+    if (!response.data || !response.data.success) {
+      return res.status(500).json({
+        success: false,
+        error: "Steam API failed",
+        data: response.data,
+      });
+    }
+
+    return res.json({
+      success: true,
+      prices: response.data.prices,
+    });
+  } catch (error) {
+    console.error("Error fetching price history:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
   }
 });
 
-// ── Health Check ───────────────────────────────────────
-app.get('/', (req, res) => {
-  res.json({ status: 'ok' });
+/**
+ * 🔥 Health check (ไว้เช็คว่า server รันอยู่)
+ */
+app.get("/", (req, res) => {
+  res.send("API is running 🚀");
 });
 
-// ── Start ──────────────────────────────────────────────
+/**
+ * 🚀 Start server
+ */
 app.listen(PORT, () => {
-  console.log(🚀 Server running on ${PORT});
+  console.log(`🚀 Server running on port ${PORT}`);
 });
