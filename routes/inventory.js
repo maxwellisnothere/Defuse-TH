@@ -1,4 +1,6 @@
 const express = require('express');
+const cache = {};
+const CACHE_TTL = 60 * 1000; // 1 นาที
 const router = express.Router();
 
 const CS2_APP_ID = 730;
