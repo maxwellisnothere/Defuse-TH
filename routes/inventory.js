@@ -1,205 +1,111 @@
 const express = require('express');
-const cache = {};
-const CACHE_TTL = 60 * 1000; // 1 นาที
 const router = express.Router();
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const { CS2_APP_ID, CS2_CONTEXT_ID, parseItem } = require('../utils/csItemParser');
 
-const CS2_APP_ID = 730;
-const CS2_CONTEXT_ID = 2;
+const JWT_SECRET = process.env.JWT_SECRET || 'defuse_th_jwt_2024';
 
-// ─────────────────────────────────────────────
-// RARITY COLOR
-// ─────────────────────────────────────────────
-const RARITY_COLORS = {
-  'Consumer Grade':   '#B0C3D9',
-  'Industrial Grade': '#5E98D9',
-  'Mil-Spec Grade':   '#4B69FF',
-  'Restricted':       '#8847FF',
-  'Classified':       '#D32CE6',
-  'Covert':           '#EB4B4B',
-  'Contraband':       '#E4AE33',
-  'Extraordinary':    '#E4AE33',
-  'Base Grade':       '#B0C3D9',
-};
+// ── ระบบดึงราคา & Cache (จากโค้ดเพื่อน) ──
+const priceCache = {};
 
-const WEAR_MAP = {
-  'Factory New':    'FN',
-  'Minimal Wear':   'MW',
-  'Field-Tested':   'FT',
-  'Well-Worn':      'WW',
-  'Battle-Scarred': 'BS',
-};
-
-// ─────────────────────────────────────────────
-// PARSE ITEM
-// ─────────────────────────────────────────────
-const parseItem = (asset, description) => {
-  if (!description) return null;
-
-  const tags = description.tags || [];
-  const getTag = (cat) =>
-    tags.find(t => t.category === cat)?.localized_tag_name || null;
-
-  const rarity  = getTag('Rarity') || 'Base Grade';
-  const wear    = getTag('Exterior');
-  const type    = getTag('Weapon') || getTag('Type') || 'Unknown';
-  const collection = getTag('Collection');
-
-  const name = description.market_hash_name || description.name || 'Unknown';
-
-  // แยกชื่อ
-  const parts   = name.split(' | ');
-  const weapon  = parts[0]?.replace('StatTrak™ ', '').replace('Souvenir ', '').trim() || name;
-  const skinRaw = parts[1] || '';
-  const skin    = skinRaw.replace(/\s*\(.*\)/, '').trim() || name;
-
-  const isStatTrak = name.includes('StatTrak™');
-  const isSouvenir = name.includes('Souvenir');
-
-  const imageUrl = description.icon_url
-    ? `https://community.cloudflare.steamstatic.com/economy/image/${description.icon_url}/360fx360f`
-    : null;
-
-  // 🔥 INSPECT LINK (สำคัญมากสำหรับ float)
-  let inspectLink = null;
-  if (description.actions && description.actions.length > 0) {
-    inspectLink = description.actions[0].link
-      ?.replace('%owner_steamid%', asset.owner)
-      ?.replace('%assetid%', asset.assetid);
+const fetchPrice = async (marketHashName) => {
+  try {
+    const url = `https://steamcommunity.com/market/priceoverview/?appid=730&currency=1&market_hash_name=${encodeURIComponent(marketHashName)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.success) {
+      return parseFloat(data.median_price?.replace(/[^0-9.]/g, '') || "0");
+    }
+  } catch (err) {
+    console.log("❌ price error:", err.message);
   }
-
-  // 🎯 Stickers (optional)
-  const stickers = description.descriptions
-    ?.filter(d => d.value?.includes('Sticker:'))
-    ?.map(d => d.value) || [];
-
-  // หมวดหมู่
-  let category = 'Guns';
-  if (name.includes('Gloves') || name.includes('Wraps')) category = 'Glove';
-  else if (
-    ['Knife','Karambit','Bayonet','Butterfly','Falchion','Flip','Gut ','Huntsman','M9 ','Navaja','Shadow','Stiletto','Talon','Ursus']
-      .some(k => name.includes(k))
-  ) category = 'Knife';
-  else if (
-    ['Case','Capsule','Package','Sticker','Graffiti','Patch','Music Kit']
-      .some(k => name.includes(k))
-  ) category = 'Cases';
-
-  return {
-    id: asset.assetid,
-    assetId: asset.assetid,
-    classId: asset.classid,
-
-    name,
-    weapon,
-    skin,
-
-    rarity,
-    rarityColor: RARITY_COLORS[rarity] || '#B0C3D9',
-
-    wear: wear || null,
-    wearShort: wear ? (WEAR_MAP[wear] || wear) : null,
-
-    // 🔥 เตรียมสำหรับ float API
-    float: null,
-    inspectLink,
-
-    // เพิ่ม metadata
-    collection,
-    stickers,
-
-    price: 0,
-    priceUSD: 0,
-
-    image: imageUrl,
-
-    category,
-    type,
-
-    tradeLock: description.tradable === 0,
-    marketable: description.marketable === 1,
-    inInventory: true,
-
-    stattrak: isStatTrak,
-    souvenir: isSouvenir,
-
-    tags,
-  };
+  return 0;
 };
 
-// ─────────────────────────────────────────────
-// GET INVENTORY
-// ─────────────────────────────────────────────
-router.get('/:steamId', async (req, res) => {
-  const { steamId } = req.params;
-  const count = req.query.count || 100;
+const fetchPriceCached = async (name) => {
+  if (priceCache[name]) return priceCache[name];
+  const price = await fetchPrice(name);
+  priceCache[name] = price;
+  return price;
+};
 
-  if (!steamId || steamId.length < 10) {
-    return res.status(400).json({ error: 'Invalid SteamID' });
-  }
+const verifyToken = (req) => {
+  const auth = req.headers.authorization;
+  if (!auth) return null;
+  try { return jwt.verify(auth.replace('Bearer ', ''), JWT_SECRET); }
+  catch { return null; }
+};
 
+// ── GET /inventory/sync (ผสมแล้ว!) ──
+router.get('/sync', async (req, res) => {
+  const user = verifyToken(req);
+  if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
+
+  const steamId = user.steamId;
+  const count = req.query.count || 100; // ให้กำหนดจำนวนที่ดึงได้
   const url = `https://steamcommunity.com/inventory/${steamId}/${CS2_APP_ID}/${CS2_CONTEXT_ID}?l=english&count=${count}`;
 
   try {
-    const response = await fetch(url, {
-      headers: { 'Accept': 'application/json' },
-    });
+    const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
 
-    if (response.status === 403) {
-      return res.status(403).json({
-        error: 'PRIVATE_INVENTORY',
-        message: 'Inventory ต้องเป็น Public',
-      });
-    }
-
-    if (response.status === 429) {
-      return res.status(429).json({
-        error: 'RATE_LIMITED',
-        message: 'โดน rate limit',
-      });
-    }
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: `Steam API error: ${response.status}`,
-      });
-    }
+    if (response.status === 403) return res.status(403).json({ error: 'PRIVATE_INVENTORY', message: 'Inventory ถูกตั้งเป็น Private' });
+    if (response.status === 429) return res.status(429).json({ error: 'RATE_LIMITED', message: 'Steam API rate limit กรุณารอ 1 นาที' });
+    if (!response.ok) return res.status(response.status).json({ error: `Steam API error: ${response.status}` });
 
     const data = await response.json();
-
     if (!data.assets || !data.descriptions) {
-      return res.json({ items: [], total: 0 });
+      return res.json({ success: true, message: 'ไม่พบไอเทมในคลัง', total: 0, items: [] });
     }
 
-    // map classid → description
     const descMap = {};
-    data.descriptions.forEach(d => {
-      descMap[d.classid] = d;
+    data.descriptions.forEach(d => descMap[d.classid] = d);
+
+    // 1. แปลงข้อมูลไอเทม
+    const rawItems = data.assets
+      .map(asset => parseItem(asset, descMap[asset.classid], steamId))
+      .filter(item => item !== null && !item.tradeLock && item.category !== 'Cases');
+
+    // 2. ดึงราคาจาก Steam (โค้ดเพื่อน)
+    const itemsWithPrices = await Promise.all(
+      rawItems.map(async (item) => {
+        // ดีเลย์เล็กน้อยเพื่อป้องกันการโดนแบน API จาก Steam (Rate Limit)
+        await new Promise(r => setTimeout(r, 200)); 
+        const priceUSD = await fetchPriceCached(item.marketHashName);
+        const priceTHB = Math.round(priceUSD * 35);
+
+        return {
+          ...item,
+          marketPriceUSD: priceUSD, // แยกเป็นชื่อ marketPrice เพื่อไม่ให้สับสนกับราคาที่ยูสเซอร์จะตั้งขาย
+          marketPriceTHB: priceTHB
+        };
+      })
+    );
+
+    // 3. จัดการระบบ Database (โค้ดเรา)
+    const dbUser = await User.findOne({ steamId });
+    const existingInventory = dbUser?.inventory || [];
+    const listedItems = existingInventory.filter(item => item.listed === true);
+
+    const finalInventory = itemsWithPrices.map(newItem => {
+      const matchListed = listedItems.find(ex => ex.assetId === newItem.assetId);
+      return matchListed ? matchListed : newItem; 
     });
 
-    const items = data.assets
-      .map(asset => parseItem(asset, descMap[asset.classid]))
-      .filter(Boolean);
+    // เซฟลง Database
+    await User.findOneAndUpdate({ steamId }, { $set: { inventory: finalInventory } });
 
-    res.json({
-      success: true,
-      steamId,
-      total: data.total_inventory_count || items.length,
-      items,
-    });
+    res.json({ success: true, steamId, total: finalInventory.length, items: finalInventory });
 
   } catch (err) {
-    res.status(500).json({
-      error: 'Fetch failed: ' + err.message,
-    });
+    console.error('❌ Sync Error:', err);
+    res.status(500).json({ error: 'Fetch failed: ' + err.message });
   }
 });
 
-// ─────────────────────────────────────────────
-// GET PRICE
-// ─────────────────────────────────────────────
+// ── GET PRICE (สำหรับดึงรายกระบอก) ──
 router.get('/price/:marketHashName', async (req, res) => {
   const name = decodeURIComponent(req.params.marketHashName);
-
   const url = `https://steamcommunity.com/market/priceoverview/?appid=730&currency=1&market_hash_name=${encodeURIComponent(name)}`;
 
   try {
@@ -207,26 +113,13 @@ router.get('/price/:marketHashName', async (req, res) => {
     const data = await response.json();
 
     if (data.success) {
-      const usdPrice = parseFloat(
-        data.median_price?.replace(/[^0-9.]/g, '') || '0'
-      );
-
+      const usdPrice = parseFloat(data.median_price?.replace(/[^0-9.]/g, '') || '0');
       res.json({
-        success: true,
-        name,
-        usd: usdPrice,
-        thb: Math.round(usdPrice * 35),
-        lowest: data.lowest_price || null,
-        median: data.median_price || null,
-        volume: data.volume || '0',
+        success: true, name, usd: usdPrice, thb: Math.round(usdPrice * 35),
+        lowest: data.lowest_price || null, median: data.median_price || null
       });
     } else {
-      res.json({
-        success: false,
-        name,
-        usd: 0,
-        thb: 0,
-      });
+      res.json({ success: false, name, usd: 0, thb: 0 });
     }
   } catch (err) {
     res.status(500).json({ error: err.message });

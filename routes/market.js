@@ -4,15 +4,44 @@ const jwt     = require('jsonwebtoken');
 const Listing = require('../models/Listing');
 const Order   = require('../models/Order');
 const User    = require('../models/User');
+const Transaction = require('../models/Transaction');
+const Withdrawal = require('../models/Withdrawal');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'defuse_th_jwt_2024';
 
+// ── ฟังก์ชันตรวจสอบ Token ──
 const verifyToken = (req) => {
   const auth = req.headers.authorization;
   if (!auth) return null;
   try { return jwt.verify(auth.replace('Bearer ', ''), JWT_SECRET); }
   catch { return null; }
 };
+
+// ── GET /market/mock-login/:steamId (สำหรับเทสเท่านั้น) ──
+router.get('/mock-login/:steamId', async (req, res) => { 
+  try {
+    await User.findOneAndUpdate(
+      { steamId: req.params.steamId },
+      { 
+        $setOnInsert: { 
+          displayName: 'User_' + req.params.steamId,
+          avatar: 'mock_avatar_url'
+        } 
+      },
+      { upsert: true, returnDocument: 'after' } 
+    );
+
+    const token = jwt.sign({
+      steamId: req.params.steamId,
+      displayName: 'User_' + req.params.steamId,
+      avatar: 'mock_avatar_url'
+    }, JWT_SECRET);
+    
+    res.json({ success: true, steamId: req.params.steamId, token });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── GET /market/listings ──────────────────────────────
 router.get('/listings', async (req, res) => {
@@ -74,7 +103,6 @@ router.post('/list', async (req, res) => {
 
     await listing.save();
 
-    // อัปเดต inventory ของ user ว่า listed แล้ว
     await User.findOneAndUpdate(
       { steamId: user.steamId, 'inventory.assetId': item.assetId || item.id },
       { $set: { 'inventory.$.listed': true, 'inventory.$.listingId': listing.listingId } }
@@ -99,7 +127,6 @@ router.delete('/list/:listingId', async (req, res) => {
     );
     if (!listing) return res.status(404).json({ error: 'ไม่พบรายการ' });
 
-    // คืนสถานะ inventory
     await User.findOneAndUpdate(
       { steamId: user.steamId, 'inventory.listingId': req.params.listingId },
       { $set: { 'inventory.$.listed': false, 'inventory.$.listingId': null } }
@@ -111,7 +138,7 @@ router.delete('/list/:listingId', async (req, res) => {
   }
 });
 
-// ── POST /market/buy/:listingId ───────────────────────
+// ── POST /market/buy/:listingId (ระบบ Escrow) ──
 router.post('/buy/:listingId', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -127,7 +154,6 @@ router.post('/buy/:listingId', async (req, res) => {
       return res.status(400).json({ error: 'ซื้อของตัวเองไม่ได้' });
     }
 
-    // เช็ค balance ผู้ซื้อ
     const buyer = await User.findOne({ steamId: user.steamId });
     if (!buyer || buyer.balance < listing.price) {
       return res.status(400).json({
@@ -137,43 +163,15 @@ router.post('/buy/:listingId', async (req, res) => {
       });
     }
 
-    // ทำธุรกรรม
-    listing.status = 'active' ? 'sold' : listing.status;
     listing.status = 'sold';
     listing.soldAt = new Date();
     await listing.save();
 
-    // หัก balance ผู้ซื้อ
     await User.findOneAndUpdate(
       { steamId: user.steamId },
-      {
-        $inc: { balance: -listing.price },
-        $push: {
-          inventory: {
-            assetId:    listing.item.assetId,
-            name:       listing.item.name,
-            weapon:     listing.item.weapon,
-            skin:       listing.item.skin,
-            rarity:     listing.item.rarity,
-            rarityColor: listing.item.rarityColor,
-            wear:       listing.item.wear,
-            float:      listing.item.float,
-            image:      listing.item.image,
-            stattrak:   listing.item.stattrak,
-            souvenir:   listing.item.souvenir,
-            acquiredAt: new Date(),
-          }
-        }
-      }
+      { $inc: { balance: -listing.price } }
     );
 
-    // เพิ่ม balance ผู้ขาย (หัก fee 5%)
-    await User.findOneAndUpdate(
-      { steamId: listing.sellerId },
-      { $inc: { balance: listing.sellerReceive } }
-    );
-
-    // บันทึก order
     const order = new Order({
       orderId:       `ORD-${Date.now()}`,
       listingId:     listing.listingId,
@@ -185,38 +183,80 @@ router.post('/buy/:listingId', async (req, res) => {
       price:         listing.price,
       fee:           listing.fee,
       sellerReceive: listing.sellerReceive,
+      status:        'pending' 
     });
     await order.save();
 
-    res.json({ success: true, order });
+    res.json({ success: true, message: 'สั่งซื้อสำเร็จ กรุณารอผู้ขายส่งไอเทมบน Steam', order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /market/my-listings ───────────────────────────
-router.get('/my-listings', async (req, res) => {
+// ── POST /market/confirm-trade/:orderId ──
+router.post('/confirm-trade/:orderId', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
 
+  const { tradeOfferId } = req.body;
+  if (!tradeOfferId) return res.status(400).json({ error: 'กรุณาระบุ Trade Offer ID จาก Steam' });
+
   try {
-    const listings = await Listing.find({ sellerId: user.steamId }).sort({ createdAt: -1 });
-    res.json({ success: true, listings });
+    const order = await Order.findOne({ orderId: req.params.orderId, sellerId: user.steamId, status: 'pending' });
+    if (!order) return res.status(404).json({ error: 'ไม่พบออเดอร์ หรือออเดอร์ไม่ได้อยู่ในสถานะรอส่งของ' });
+
+    order.tradeOfferId = tradeOfferId;
+    order.status = 'verifying';
+    await order.save();
+
+    res.json({ success: true, message: 'บันทึก Trade ID สำเร็จ ระบบกำลังตรวจสอบการส่งมอบ', order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /market/orders ────────────────────────────────
-router.get('/orders', async (req, res) => {
-  const user = verifyToken(req);
-  if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
-
+// ── POST /market/complete-trade/:orderId ──
+router.post('/complete-trade/:orderId', async (req, res) => {
   try {
-    const orders = await Order.find({
-      $or: [{ buyerId: user.steamId }, { sellerId: user.steamId }]
-    }).sort({ createdAt: -1 });
-    res.json({ success: true, orders });
+    const order = await Order.findOne({ orderId: req.params.orderId, status: 'verifying' });
+    if (!order) return res.status(404).json({ error: 'ไม่พบออเดอร์ที่รอการตรวจสอบ' });
+
+    // 1. โอนเงินให้ผู้ขาย
+    await User.findOneAndUpdate(
+      { steamId: order.sellerId },
+      { 
+        $inc: { balance: order.sellerReceive },
+        $pull: { inventory: { listingId: order.listingId } } 
+      }
+    );
+
+    // 2. โอนไอเทมเข้า Inventory ผู้ซื้อ
+    await User.findOneAndUpdate(
+      { steamId: order.buyerId },
+      {
+        $push: {
+          inventory: {
+            assetId:    order.item.assetId,
+            name:       order.item.name,
+            weapon:     order.item.weapon,
+            skin:       order.item.skin,
+            rarity:     order.item.rarity,
+            rarityColor: order.item.rarityColor,
+            wear:       order.item.wear,
+            float:      order.item.float,
+            image:      order.item.image,
+            stattrak:   order.item.stattrak,
+            souvenir:   order.item.souvenir,
+            acquiredAt: new Date(),
+          }
+        }
+      }
+    );
+
+    order.status = 'completed';
+    await order.save();
+
+    res.json({ success: true, message: 'ตรวจสอบสำเร็จ! โอนเงินและไอเทมเรียบร้อยแล้ว' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -229,27 +269,85 @@ router.get('/balance', async (req, res) => {
 
   try {
     const dbUser = await User.findOne({ steamId: user.steamId });
-    res.json({ success: true, steamId: user.steamId, balance: dbUser?.balance || 0 });
+    res.json({ success: true, balance: dbUser?.balance || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── POST /market/deposit ──────────────────────────────
+// ── POST /market/deposit (เติมเงิน + บันทึกประวัติ) ──
 router.post('/deposit', async (req, res) => {
-  const user = verifyToken(req);
-  if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
+  const userToken = verifyToken(req);
+  if (!userToken) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
 
-  const { amount } = req.body;
+  const amount = Number(req.body.amount);
   if (!amount || amount <= 0) return res.status(400).json({ error: 'จำนวนเงินไม่ถูกต้อง' });
 
   try {
     const dbUser = await User.findOneAndUpdate(
-      { steamId: user.steamId },
-      { $inc: { balance: Number(amount) } },
+      { steamId: userToken.steamId },
+      { $inc: { balance: amount } },
       { new: true, upsert: true }
     );
-    res.json({ success: true, newBalance: dbUser.balance });
+
+    const newTransaction = new Transaction({
+      steamId: userToken.steamId,
+      type: 'deposit',
+      amount: amount,
+      status: 'completed'
+    });
+    await newTransaction.save();
+
+    res.json({ success: true, message: 'เติมเงินสำเร็จ', newBalance: dbUser.balance, transaction: newTransaction });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /market/withdraw (🔥 ใหม่: ขอถอนเงิน) ──
+router.post('/withdraw', async (req, res) => {
+  const userToken = verifyToken(req);
+  if (!userToken) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
+
+  const { amount, bankName, accountNumber, accountName } = req.body;
+  const withdrawAmount = Number(amount);
+
+  if (!withdrawAmount || withdrawAmount < 100) {
+    return res.status(400).json({ error: 'ขั้นต่ำการถอนคือ 100 บาท' });
+  }
+
+  try {
+    const dbUser = await User.findOne({ steamId: userToken.steamId });
+    if (!dbUser || dbUser.balance < withdrawAmount) {
+      return res.status(400).json({ error: 'ยอดเงินคงเหลือไม่เพียงพอ' });
+    }
+
+    // 1. หักเงินจาก Balance ทันที (Hold เงินไว้)
+    dbUser.balance -= withdrawAmount;
+    await dbUser.save();
+
+    // 2. สร้างคำขอถอนเงิน
+    const withdrawal = new Withdrawal({
+      steamId: userToken.steamId,
+      amount: withdrawAmount,
+      bankName,
+      accountNumber,
+      accountName,
+      status: 'pending'
+    });
+    await withdrawal.save();
+
+    // 3. บันทึกลง Transaction History
+    const transaction = new Transaction({
+      steamId: userToken.steamId,
+      type: 'withdraw',
+      amount: -withdrawAmount, // ติดลบเพราะเงินออก
+      status: 'pending',
+      referenceId: withdrawal._id
+    });
+    await transaction.save();
+
+    res.json({ success: true, message: 'ส่งคำขอถอนเงินเรียบร้อย รอแอดมินดำเนินการ', withdrawal });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

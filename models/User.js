@@ -23,6 +23,11 @@ const userSchema = new mongoose.Schema({
     listed:     { type: Boolean, default: false },
     listingId:  { type: String, default: null },
     acquiredAt: { type: Date, default: Date.now },
+    inspectLink: { type: String, default: null }, // ตัดมาจากinventory.js
+    stickers: [{ type: String }], // ตัดมาจากinventory.js
+    collectionName: { type: String, default: null }, // เปลี่ยนชื่อนิดนึงกันชนคำสงวน
+    marketPriceUSD: { type: Number, default: 0 }, //เพิ่ม
+    marketPriceTHB: { type: Number, default: 0 }, //เพิ่มทำไมไม่รู้ว
   }],
   createdAt: { type: Date, default: Date.now },
   lastLogin: { type: Date, default: Date.now },

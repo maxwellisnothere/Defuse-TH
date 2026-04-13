@@ -8,7 +8,7 @@ const User = require("../models/User");
 const JWT_SECRET = process.env.JWT_SECRET || "defuse_th_jwt_2024";
 
 // ✅ ใช้ URL จริง (สำคัญมาก ห้ามพลาด)
-const BASE_URL = "https://defuse-th-backend-main.onrender.com";
+const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
 // ── Passport Steam Strategy ────────────────────────────
 passport.use(
@@ -41,7 +41,7 @@ passport.use(
               inventory: [],
             },
           },
-          { upsert: true, new: true }
+          { upsert: true, returnDocument: 'after' }
         );
 
         console.log("✅ User saved:", result?.steamId);
