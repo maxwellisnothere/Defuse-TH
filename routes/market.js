@@ -6,11 +6,10 @@ const Order   = require('../models/Order');
 const User    = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Withdrawal = require('../models/Withdrawal');
-const io = require('../utils/socket'); // 🟢 ดึง socket มาใช้
+const io = require('../utils/socket'); 
 
 const JWT_SECRET = process.env.JWT_SECRET || 'defuse_th_jwt_2024';
 
-// ── ฟังก์ชันตรวจสอบ Token ──
 const verifyToken = (req) => {
   const auth = req.headers.authorization;
   if (!auth) return null;
@@ -18,7 +17,6 @@ const verifyToken = (req) => {
   catch { return null; }
 };
 
-// ── GET /market/mock-login/:steamId (สำหรับเทสเท่านั้น) ──
 router.get('/mock-login/:steamId', async (req, res) => { 
   try {
     await User.findOneAndUpdate(
@@ -44,7 +42,6 @@ router.get('/mock-login/:steamId', async (req, res) => {
   }
 });
 
-// ── GET /market/listings ──────────────────────────────
 router.get('/listings', async (req, res) => {
   try {
     const { weapon, rarity, wear, minPrice, maxPrice, sort = 'newest' } = req.query;
@@ -67,7 +64,6 @@ router.get('/listings', async (req, res) => {
   }
 });
 
-// ── POST /market/list ─────────────────────────────────
 router.post('/list', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -78,7 +74,6 @@ router.post('/list', async (req, res) => {
   }
 
   try {
-    // ดึงข้อมูล User จริงจาก DB เพื่อให้ได้ displayName ล่าสุดตอนลงขาย
     const dbUser = await User.findOne({ steamId: user.steamId });
 
     const listing = new Listing({
@@ -118,7 +113,6 @@ router.post('/list', async (req, res) => {
   }
 });
 
-// ── DELETE /market/list/:listingId ────────────────────
 router.delete('/list/:listingId', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -142,52 +136,50 @@ router.delete('/list/:listingId', async (req, res) => {
   }
 });
 
-// ── POST /market/buy/:listingId (ระบบ Escrow) ──
+// ── POST /market/buy/:listingId ──
 router.post('/buy/:listingId', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
 
   try {
+    // ✅ 1. หารายการขายให้เจอ
     const listing = await Listing.findOne({
       listingId: req.params.listingId,
       status: 'active',
     });
 
-    if (!listing) return res.status(404).json({ error: 'ไม่พบรายการหรือขายไปแล้ว' });
+    if (!listing) return res.status(404).json({ error: 'ไม่พบรายการหรือถูกขายไปแล้ว' });
+    
+    // ✅ 2. ห้ามซื้อของตัวเอง
     if (listing.sellerId === user.steamId) {
-      return res.status(400).json({ error: 'ซื้อของตัวเองไม่ได้' });
+      return res.status(400).json({ error: 'ไม่สามารถซื้อไอเทมของตัวเองได้' });
     }
 
-    // ดึงข้อมูลผู้ซื้อล่าสุดจาก Database
+    // ✅ 3. เช็คเงินผู้ซื้อ
     const buyer = await User.findOne({ steamId: user.steamId });
     if (!buyer || buyer.balance < listing.price) {
-      return res.status(400).json({
-        error: 'ยอดเงินไม่พอ',
-        required: listing.price,
-        current: buyer?.balance || 0,
-      });
+      return res.status(400).json({ error: 'ยอดเงินของคุณไม่เพียงพอ' });
     }
 
-    // ดึงข้อมูลผู้ขายล่าสุดจาก Database เพื่อเอา displayName 
-    const seller = await User.findOne({ steamId: listing.sellerId });
-    if (!seller) return res.status(404).json({ error: 'ไม่พบข้อมูลผู้ขายในระบบ' });
-
+    // ✅ 4. อัปเดตสถานะให้เป็น sold
     listing.status = 'sold';
     listing.soldAt = new Date();
     await listing.save();
 
+    // ✅ 5. หักเงินผู้ซื้อทันที
     await User.findOneAndUpdate(
       { steamId: user.steamId },
       { $inc: { balance: -listing.price } }
     );
 
+    // ✅ 6. สร้าง Order (ใช้ชื่อจาก Listing ถ้าหาผู้ขายไม่เจอ)
     const order = new Order({
       orderId:       `ORD-${Date.now()}`,
       listingId:     listing.listingId,
       buyerId:       buyer.steamId,
-      buyerName:     buyer.displayName, // ✅ ใช้ชื่อจาก Database
-      sellerId:      seller.steamId,
-      sellerName:    seller.displayName, // ✅ ใช้ชื่อจาก Database
+      buyerName:     buyer.displayName || 'Unknown Buyer',
+      sellerId:      listing.sellerId,
+      sellerName:    listing.sellerName || 'Unknown Seller', 
       item:          listing.item,
       price:         listing.price,
       fee:           listing.fee,
@@ -196,22 +188,26 @@ router.post('/buy/:listingId', async (req, res) => {
     });
     await order.save();
     
-    // 🟢 ส่งแจ้งเตือน Real-time ไปให้คนขาย
-    io.getIO().to(seller.steamId).emit('tradeNotification', {
-      type: 'NEW_ORDER',
-      title: '🎉 ขายออกแล้ว!',
-      message: `คุณ ${buyer.displayName} ได้สั่งซื้อ ${listing.item.weapon} | ${listing.item.skin} ของคุณแล้ว! กรุณาส่ง Trade Offer ภายใน 7`,
-      orderId: order.orderId,
-      price: listing.price
-    });
+    // 🟢 แจ้งเตือนคนขาย
+    if (io && io.getIO) {
+        try {
+            io.getIO().to(listing.sellerId).emit('tradeNotification', {
+            type: 'NEW_ORDER',
+            title: '🎉 ขายออกแล้ว!',
+            message: `คุณ ${buyer.displayName} ได้สั่งซื้อ ${listing.item.weapon} | ${listing.item.skin} ของคุณแล้ว!`,
+            orderId: order.orderId,
+            price: listing.price
+            });
+        } catch(e) { console.log('Socket error ignored') }
+    }
 
-    res.json({ success: true, message: 'สั่งซื้อสำเร็จ กรุณารอผู้ขายส่งไอเทมบน Steam', order });
+    res.json({ success: true, message: 'สั่งซื้อสำเร็จ กรุณารอผู้ขายส่งไอเทม', order });
   } catch (err) {
+    console.log("❌ Buy Error in Backend:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── POST /market/confirm-trade/:orderId ──
 router.post('/confirm-trade/:orderId', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -233,13 +229,11 @@ router.post('/confirm-trade/:orderId', async (req, res) => {
   }
 });
 
-// ── POST /market/complete-trade/:orderId ──
 router.post('/complete-trade/:orderId', async (req, res) => {
   try {
     const order = await Order.findOne({ orderId: req.params.orderId, status: 'verifying' });
     if (!order) return res.status(404).json({ error: 'ไม่พบออเดอร์ที่รอการตรวจสอบ' });
 
-    // 1. โอนเงินให้ผู้ขาย และเอาปืนออกจากคลังคนขาย
     await User.findOneAndUpdate(
       { steamId: order.sellerId },
       { 
@@ -248,7 +242,6 @@ router.post('/complete-trade/:orderId', async (req, res) => {
       }
     );
 
-    // 2. โอนไอเทมเข้า Inventory ผู้ซื้อ
     await User.findOneAndUpdate(
       { steamId: order.buyerId },
       {
@@ -280,7 +273,6 @@ router.post('/complete-trade/:orderId', async (req, res) => {
   }
 });
 
-// ── GET /market/balance ───────────────────────────────
 router.get('/balance', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -293,7 +285,6 @@ router.get('/balance', async (req, res) => {
   }
 });
 
-// ── POST /market/deposit (เติมเงิน + บันทึกประวัติ) ──
 router.post('/deposit', async (req, res) => {
   const userToken = verifyToken(req);
   if (!userToken) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -322,7 +313,6 @@ router.post('/deposit', async (req, res) => {
   }
 });
 
-// ── POST /market/withdraw (ขอถอนเงิน) ──
 router.post('/withdraw', async (req, res) => {
   const userToken = verifyToken(req);
   if (!userToken) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -367,5 +357,32 @@ router.post('/withdraw', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
+// ── GET /market/orders/buy (ประวัติการซื้อของฉัน) ──
+router.get('/orders/buy', async (req, res) => {
+  const user = verifyToken(req);
+  if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
+  try {
+    const orders = await Order.find({ buyerId: user.steamId }).sort({ createdAt: -1 });
+    res.json({ success: true, orders });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /market/orders/sell (ประวัติการขายของฉัน) ──
+router.get('/orders/sell', async (req, res) => {
+  const user = verifyToken(req);
+  if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
+  try {
+    // ดึงออเดอร์ที่คนอื่นกดซื้อของๆ เราไป
+    const orders = await Order.find({ sellerId: user.steamId }).sort({ createdAt: -1 });
+    res.json({ success: true, orders });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 module.exports = router;

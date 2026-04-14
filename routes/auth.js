@@ -8,7 +8,7 @@ const User = require("../models/User");
 const JWT_SECRET = process.env.JWT_SECRET || "defuse_th_jwt_2024";
 
 // ✅ ใช้ URL จริง (สำคัญมาก ห้ามพลาด)
-const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
+const BASE_URL = process.env.BASE_URL || "http://10.0.2.2:3000";
 
 // ── Passport Steam Strategy ────────────────────────────
 passport.use(
