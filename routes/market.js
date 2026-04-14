@@ -6,6 +6,7 @@ const Order   = require('../models/Order');
 const User    = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Withdrawal = require('../models/Withdrawal');
+const io = require('../utils/socket'); // 🟢 ดึง socket มาใช้
 
 const JWT_SECRET = process.env.JWT_SECRET || 'defuse_th_jwt_2024';
 
@@ -77,11 +78,14 @@ router.post('/list', async (req, res) => {
   }
 
   try {
+    // ดึงข้อมูล User จริงจาก DB เพื่อให้ได้ displayName ล่าสุดตอนลงขาย
+    const dbUser = await User.findOne({ steamId: user.steamId });
+
     const listing = new Listing({
       listingId:    `LST-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-      sellerId:     user.steamId,
-      sellerName:   user.displayName,
-      sellerAvatar: user.avatar,
+      sellerId:     dbUser.steamId,
+      sellerName:   dbUser.displayName || user.displayName,
+      sellerAvatar: dbUser.avatar || user.avatar,
       item: {
         assetId:    item.assetId || item.id,
         name:       item.name,
@@ -154,6 +158,7 @@ router.post('/buy/:listingId', async (req, res) => {
       return res.status(400).json({ error: 'ซื้อของตัวเองไม่ได้' });
     }
 
+    // ดึงข้อมูลผู้ซื้อล่าสุดจาก Database
     const buyer = await User.findOne({ steamId: user.steamId });
     if (!buyer || buyer.balance < listing.price) {
       return res.status(400).json({
@@ -162,6 +167,10 @@ router.post('/buy/:listingId', async (req, res) => {
         current: buyer?.balance || 0,
       });
     }
+
+    // ดึงข้อมูลผู้ขายล่าสุดจาก Database เพื่อเอา displayName 
+    const seller = await User.findOne({ steamId: listing.sellerId });
+    if (!seller) return res.status(404).json({ error: 'ไม่พบข้อมูลผู้ขายในระบบ' });
 
     listing.status = 'sold';
     listing.soldAt = new Date();
@@ -175,10 +184,10 @@ router.post('/buy/:listingId', async (req, res) => {
     const order = new Order({
       orderId:       `ORD-${Date.now()}`,
       listingId:     listing.listingId,
-      buyerId:       user.steamId,
-      buyerName:     user.displayName,
-      sellerId:      listing.sellerId,
-      sellerName:    listing.sellerName,
+      buyerId:       buyer.steamId,
+      buyerName:     buyer.displayName, // ✅ ใช้ชื่อจาก Database
+      sellerId:      seller.steamId,
+      sellerName:    seller.displayName, // ✅ ใช้ชื่อจาก Database
       item:          listing.item,
       price:         listing.price,
       fee:           listing.fee,
@@ -186,6 +195,15 @@ router.post('/buy/:listingId', async (req, res) => {
       status:        'pending' 
     });
     await order.save();
+    
+    // 🟢 ส่งแจ้งเตือน Real-time ไปให้คนขาย
+    io.getIO().to(seller.steamId).emit('tradeNotification', {
+      type: 'NEW_ORDER',
+      title: '🎉 ขายออกแล้ว!',
+      message: `คุณ ${buyer.displayName} ได้สั่งซื้อ ${listing.item.weapon} | ${listing.item.skin} ของคุณแล้ว! กรุณาส่ง Trade Offer ภายใน 7`,
+      orderId: order.orderId,
+      price: listing.price
+    });
 
     res.json({ success: true, message: 'สั่งซื้อสำเร็จ กรุณารอผู้ขายส่งไอเทมบน Steam', order });
   } catch (err) {
@@ -221,7 +239,7 @@ router.post('/complete-trade/:orderId', async (req, res) => {
     const order = await Order.findOne({ orderId: req.params.orderId, status: 'verifying' });
     if (!order) return res.status(404).json({ error: 'ไม่พบออเดอร์ที่รอการตรวจสอบ' });
 
-    // 1. โอนเงินให้ผู้ขาย
+    // 1. โอนเงินให้ผู้ขาย และเอาปืนออกจากคลังคนขาย
     await User.findOneAndUpdate(
       { steamId: order.sellerId },
       { 
@@ -304,7 +322,7 @@ router.post('/deposit', async (req, res) => {
   }
 });
 
-// ── POST /market/withdraw (🔥 ใหม่: ขอถอนเงิน) ──
+// ── POST /market/withdraw (ขอถอนเงิน) ──
 router.post('/withdraw', async (req, res) => {
   const userToken = verifyToken(req);
   if (!userToken) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -322,11 +340,9 @@ router.post('/withdraw', async (req, res) => {
       return res.status(400).json({ error: 'ยอดเงินคงเหลือไม่เพียงพอ' });
     }
 
-    // 1. หักเงินจาก Balance ทันที (Hold เงินไว้)
     dbUser.balance -= withdrawAmount;
     await dbUser.save();
 
-    // 2. สร้างคำขอถอนเงิน
     const withdrawal = new Withdrawal({
       steamId: userToken.steamId,
       amount: withdrawAmount,
@@ -337,11 +353,10 @@ router.post('/withdraw', async (req, res) => {
     });
     await withdrawal.save();
 
-    // 3. บันทึกลง Transaction History
     const transaction = new Transaction({
       steamId: userToken.steamId,
       type: 'withdraw',
-      amount: -withdrawAmount, // ติดลบเพราะเงินออก
+      amount: -withdrawAmount, 
       status: 'pending',
       referenceId: withdrawal._id
     });

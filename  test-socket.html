@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrajaoJoKe - Seller Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f1115;
+            --card-bg: #1a1e24;
+            --accent: #00ff88;
+            --text-main: #ffffff;
+            --text-sub: #8b929a;
+        }
+
+        body {
+            font-family: 'Kanit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .dashboard-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .dashboard-header h2 {
+            margin: 0;
+            font-size: 28px;
+            letter-spacing: 1px;
+            background: linear-gradient(90deg, var(--accent), #00b8ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 255, 136, 0.1);
+            color: var(--accent);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            margin-top: 10px;
+            border: 1px solid rgba(0, 255, 136, 0.2);
+        }
+
+        .pulse {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent);
+            animation: pulse-anim 1.5s infinite;
+        }
+
+        @keyframes pulse-anim {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(0, 255, 136, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+        }
+
+        #notification-container {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .alert-card {
+            background-color: var(--card-bg);
+            border-left: 4px solid var(--accent);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            position: relative;
+            overflow: hidden;
+            animation: slideIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            transition: all 0.3s ease;
+        }
+
+        .alert-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 30px rgba(0, 255, 136, 0.1);
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(50px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .alert-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .alert-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent);
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .alert-time {
+            font-size: 12px;
+            color: var(--text-sub);
+        }
+
+        .alert-message {
+            font-size: 15px;
+            line-height: 1.5;
+            color: #d1d5db;
+            margin: 0 0 15px 0;
+        }
+
+        .alert-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            padding-top: 12px;
+        }
+
+        .order-id {
+            font-family: monospace;
+            background: rgba(0,0,0,0.5);
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: var(--text-sub);
+            font-size: 12px;
+        }
+
+        .action-btn {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 6px 15px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-family: 'Kanit', sans-serif;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .action-btn:hover {
+            background: #00d672;
+            transform: scale(1.05);
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: none;
+            border: none;
+            color: var(--text-sub);
+            font-size: 18px;
+            cursor: pointer;
+        }
+        .close-btn:hover { color: #ff4757; }
+
+        .empty-state {
+            text-align: center;
+            color: var(--text-sub);
+            padding: 40px;
+            border: 2px dashed rgba(255,255,255,0.1);
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard-header">
+        <h2>DEFUSE TH : SELLER RADAR</h2>
+        <div class="status-badge" id="status-indicator">
+            <div class="pulse"></div>
+            กำลังเชื่อมต่อเซิร์ฟเวอร์...
+        </div>
+    </div>
+
+    <div id="notification-container">
+        <div class="empty-state" id="empty-state">
+            📡 กำลังรอออเดอร์ใหม่จากลูกค้า...
+        </div>
+    </div>
+
+    <script>
+        const socket = io('http://localhost:3000');
+        const container = document.getElementById('notification-container');
+        const emptyState = document.getElementById('empty-state');
+        const statusIndicator = document.getElementById('status-indicator');
+
+        // เสียงแจ้งเตือน (Cash Register / Success Sound)
+        const notifSound = new Audio('https://assets.mixkit.co/active_storage/sfx/2013/2013-preview.mp3');
+        notifSound.volume = 0.5;
+
+        socket.on('connect', () => {
+            console.log('✅ เชื่อมต่อสำเร็จ');
+            statusIndicator.innerHTML = `<div class="pulse"></div>ออนไลน์ (BrajaoJoKe)`;
+            statusIndicator.style.background = 'rgba(0, 255, 136, 0.1)';
+            statusIndicator.style.color = 'var(--accent)';
+            statusIndicator.style.borderColor = 'rgba(0, 255, 136, 0.2)';
+            
+            socket.emit('joinRoom', '76561198272440551'); 
+        });
+
+        socket.on('disconnect', () => {
+            statusIndicator.innerHTML = `<div class="pulse" style="background:#ff4757; box-shadow:0 0 10px #ff4757;"></div>ออฟไลน์`;
+            statusIndicator.style.color = '#ff4757';
+            statusIndicator.style.borderColor = 'rgba(255, 71, 87, 0.2)';
+            statusIndicator.style.background = 'rgba(255, 71, 87, 0.1)';
+        });
+
+        socket.on('tradeNotification', (data) => {
+            // ซ่อนข้อความ "รอออเดอร์"
+            if (emptyState) emptyState.style.display = 'none';
+
+            // เล่นเสียง
+            notifSound.play().catch(e => console.log("Browser block auto-play sound"));
+
+            const timeNow = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+            
+            // สร้างกล่องแจ้งเตือนใหม่
+            const alertBox = document.createElement('div');
+            alertBox.className = 'alert-card';
+            alertBox.innerHTML = `
+                <button class="close-btn" onclick="this.parentElement.remove()">×</button>
+                <div class="alert-header">
+                    <h3 class="alert-title">🛒 ${data.title}</h3>
+                    <span class="alert-time">${timeNow}</span>
+                </div>
+                <p class="alert-message">${data.message}</p>
+                <div class="alert-footer">
+                    <span class="order-id">${data.orderId}</span>
+                    <button class="action-btn" onclick="window.open('https://steamcommunity.com/tradeoffer/new', '_blank')">ส่งของเลย</button>
+                </div>
+            `;
+
+            // แทรกลงไปด้านบนสุด (อันใหม่สุดอยู่บน)
+            container.prepend(alertBox);
+        });
+    </script>
+</body>
+</html>
