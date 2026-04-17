@@ -7,7 +7,7 @@ const User = require("../models/User");
 
 const JWT_SECRET = process.env.JWT_SECRET || "defuse_th_jwt_2024";
 
-// ✅ ใช้ URL จริง (สำคัญมาก ห้ามพลาด)
+// ✅ ใช้ URL จริงของ Server (สำคัญมากสำหรับการทำ Redirect)
 const BASE_URL = process.env.BASE_URL || "http://10.0.2.2:3000";
 
 // ── Passport Steam Strategy ────────────────────────────
@@ -21,17 +21,19 @@ passport.use(
     async (identifier, profile, done) => {
       try {
         const steamId = profile.id;
-        console.log("🔥 Strategy fired, steamId:", steamId);
+        
+        // 🌟 ดึงรูปภาพขนาดใหญ่ที่สุด (avatarfull) จากก้อนข้อมูลดิบ (_json)
+        const avatarUrl = profile._json?.avatarfull || 
+                          profile.photos?.[2]?.value || 
+                          profile.photos?.[0]?.value || "";
 
+        // อัปเดตข้อมูลผู้ใช้ หรือสร้างใหม่ถ้ายังไม่มี (Upsert)
         const result = await User.findOneAndUpdate(
           { steamId },
           {
             $set: {
               displayName: profile.displayName,
-              avatar:
-                profile.photos?.[2]?.value ||
-                profile.photos?.[0]?.value ||
-                "",
+              avatar: avatarUrl,
               profileUrl: profile._json?.profileurl || "",
               lastLogin: new Date(),
             },
@@ -41,10 +43,10 @@ passport.use(
               inventory: [],
             },
           },
-          { upsert: true, returnDocument: 'after' }
+          { upsert: true, new: true } // ใช้ new: true เพื่อคืนค่าข้อมูลที่อัปเดตแล้ว
         );
 
-        console.log("✅ User saved:", result?.steamId);
+        console.log("✅ User DB Updated:", result?.steamId);
         return done(null, profile);
       } catch (err) {
         console.error("❌ DB error:", err.message);
@@ -57,13 +59,12 @@ passport.use(
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
-// ── GET /auth/steam ────────────────────────────────────
+// ── GET /auth/steam (ทางเข้าการ Login) ──────────────────
 router.get("/steam", (req, res, next) => {
+  // รับค่า redirect แฝงมาเพื่อส่งต่อกลับไปยังแอป
   const redirectUri = req.query.redirect || "myapp://auth/callback";
-
-  console.log("📌 redirectUri:", redirectUri);
-
-  // encode redirect ไปใน state
+  
+  // encode redirect ไปใน state ของ OpenID
   const state = Buffer.from(redirectUri).toString("base64");
 
   passport.authenticate("steam", {
@@ -72,7 +73,7 @@ router.get("/steam", (req, res, next) => {
   })(req, res, next);
 });
 
-// ── GET /auth/steam/return ─────────────────────────────
+// ── GET /auth/steam/return (ขากลับจาก Steam) ──────────────
 router.get(
   "/steam/return",
   passport.authenticate("steam", {
@@ -82,42 +83,41 @@ router.get(
   async (req, res) => {
     try {
       const steamUser = req.user;
+      const avatarUrl = steamUser._json?.avatarfull || ""; // ดึงรูปภาพขนาดเต็ม
 
-      console.log("🔁 RETURN QUERY:", req.query);
-
-      // default fallback
+      // ค่าเริ่มต้นสำหรับ Redirect กลับไปที่มือถือ
       let redirectUri = "myapp://auth/callback";
 
-      // decode state กลับมา
-      try {
-        if (req.query.state) {
-          redirectUri = Buffer.from(
-            req.query.state,
-            "base64"
-          ).toString("utf-8");
+      // decode state เพื่อดูว่าต้องยิงกลับไปที่ URL ไหน
+      if (req.query.state) {
+        try {
+          redirectUri = Buffer.from(req.query.state, "base64").toString("utf-8");
+        } catch (e) {
+          console.log("❌ decode state error:", e);
         }
-      } catch (e) {
-        console.log("❌ decode state error:", e);
       }
 
+      // 🌟 สร้าง JWT Token โดยแนบข้อมูลสำคัญลงไปด้วย
       const token = jwt.sign(
         {
           steamId: steamUser.id,
           displayName: steamUser.displayName,
-          avatar: steamUser.photos?.[2]?.value || "",
+          avatar: avatarUrl, 
         },
         JWT_SECRET,
         { expiresIn: "7d" }
       );
 
+      // 🌟 ประกอบ URL สำหรับ Deep Link กลับเข้าแอป
+      // แนบข้อมูลไปใน Query Params เพื่อให้ Frontend เก็บลง AsyncStorage ได้ทันที
       const appUrl =
         `${redirectUri}` +
         `?token=${token}` +
         `&steamId=${steamUser.id}` +
-        `&name=${encodeURIComponent(steamUser.displayName)}`;
+        `&name=${encodeURIComponent(steamUser.displayName)}` +
+        `&avatar=${encodeURIComponent(avatarUrl)}`; 
 
-      console.log("✅ Redirecting to:", appUrl);
-
+      console.log("✅ Redirecting with Auth Data:", appUrl);
       return res.redirect(appUrl);
     } catch (err) {
       console.error("❌ ERROR:", err);
@@ -132,20 +132,20 @@ router.get("/failed", (req, res) => {
   res.redirect("myapp://auth/callback?error=login_failed");
 });
 
-// ── POST /auth/mock-login (DEV) ─────────────────────────
+// ── POST /auth/mock-login (สำหรับทดสอบ) ──────────────────
 router.post("/mock-login", async (req, res) => {
   try {
     const { steamId, displayName } = req.body;
-
     const mockSteamId = steamId || "76561198283624115";
     const mockName = displayName || "TestUser";
+    const mockAvatar = "https://avatars.akamai.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg";
 
     await User.findOneAndUpdate(
       { steamId: mockSteamId },
       {
         $set: {
           displayName: mockName,
-          avatar: "",
+          avatar: mockAvatar,
           lastLogin: new Date(),
         },
         $setOnInsert: {
@@ -158,7 +158,7 @@ router.post("/mock-login", async (req, res) => {
     );
 
     const token = jwt.sign(
-      { steamId: mockSteamId, displayName: mockName, avatar: "" },
+      { steamId: mockSteamId, displayName: mockName, avatar: mockAvatar },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -168,6 +168,7 @@ router.post("/mock-login", async (req, res) => {
       token,
       steamId: mockSteamId,
       displayName: mockName,
+      avatar: mockAvatar
     });
   } catch (err) {
     console.error("❌ mock-login error:", err);
@@ -193,7 +194,6 @@ router.get("/user/:steamId", async (req, res) => {
   try {
     const user = await User.findOne({ steamId: req.params.steamId });
     if (!user) return res.status(404).json({ error: "ไม่พบ User" });
-
     res.json({ success: true, user });
   } catch (err) {
     console.error("❌ user fetch error:", err);
