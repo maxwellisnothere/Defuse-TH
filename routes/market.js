@@ -375,42 +375,55 @@ router.get('/orders/sell', async (req, res) => {
 
 // 🟢 2. เพิ่ม Route สำหรับดึงเทรนด์ตลาดตรงนี้
 // ── GET /market/trends (สำหรับแสดงหน้า Home) ──────────────────
+// ── GET /market/trends (แสดงเทรนด์ราคาจริงจาก PriceHistory) ──────────────────
 router.get('/trends', async (req, res) => {
   try {
-    const trendItems = [
-      "AK-47 | Redline (Field-Tested)",
-      "AWP | Asiimov (Well-Worn)",
-      "M4A1-S | Printstream (Minimal Wear)"
-    ];
-
-    const results = [];
-
-    for (const itemName of trendItems) {
-      const latestPrice = await PriceHistory.findOne({ itemName }).sort({ recordedAt: -1 });
+    // 1. หาชื่อไอเทมที่มีการบันทึกประวัติราคาไว้ล่าสุด (เอามาเฉพาะชื่อที่ไม่ซ้ำกัน 10 ชิ้นแรก)
+    const distinctItems = await PriceHistory.distinct('itemName');
+    
+    // เราจะดึงข้อมูลประวัติเพื่อมาคำนวณ
+    const trends = await Promise.all(distinctItems.slice(0, 10).map(async (name) => {
       
-      if (!latestPrice) {
-        results.push({
-          id: itemName,
-          name: itemName,
-          price: "฿ 0.00",
-          change: "กำลังอัปเดต",
-          isUp: true,
-          image: "https://steamcommunity-a.akamaihd.net/economy/image/-9a81dlWLwJ2UUGcVs_nsVtzdOEdtWwKGZZLQHTxDZ7I56KU0Zwwo4NUX4oFJZEHLbXH5ApeO4YmlhxYQknCRvCo04DEVlxkKgpot7HxfDhjxszJemkV092lnYmGmOHLPr7Vn35cppQiiu-UoI_zi1Hk-xA9N2ilcNOXIwM-MF7U_wK9wuy8h8Di_r_rwwXg__Bz/200fx185f"
-        });
-        continue;
+      // 2. ดึงราคา 2 จุดล่าสุดของไอเทมนั้นๆ เพื่อมาเทียบกัน (ปัจจุบัน vs ก่อนหน้า)
+      const history = await PriceHistory.find({ itemName: name })
+        .sort({ recordedAt: -1 })
+        .limit(2);
+
+      if (history.length === 0) return null;
+
+      const currentPrice = history[0].price;
+      const previousPrice = history.length > 1 ? history[1].price : currentPrice;
+      
+      // 3. คำนวณเปอร์เซ็นต์การเปลี่ยนแปลง
+      let trendValue = 0;
+      if (previousPrice > 0) {
+        trendValue = ((currentPrice - previousPrice) / previousPrice) * 100;
       }
 
-      results.push({
-        id: itemName,
-        name: itemName,
-        price: `฿ ${latestPrice.price.toLocaleString('th-TH', { minimumFractionDigits: 2 })}`,
-        change: "รอคำนวณพรุ่งนี้", 
-        isUp: true,
-        image: "https://steamcommunity-a.akamaihd.net/economy/image/-9a81dlWLwJ2UUGcVs_nsVtzdOEdtWwKGZZLQHTxDZ7I56KU0Zwwo4NUX4oFJZEHLbXH5ApeO4YmlhxYQknCRvCo04DEVlxkKgpot7HxfDhjxszJemkV092lnYmGmOHLPr7Vn35cppQiiu-UoI_zi1Hk-xA9N2ilcNOXIwM-MF7U_wK9wuy8h8Di_r_rwwXg__Bz/200fx185f"
-      });
-    }
+      // 4. ไปดึงข้อมูลสกิน (รูปภาพ, สีความหายาก) จาก Listing หรือระบบ Item หลัก
+      // เพื่อให้รูปภาพและสีตรงกับตัวไอเทมจริงๆ ไม่ใช่รูปเดิมซ้ำๆ
+      const itemInfo = await Listing.findOne({ "item.name": name }).select('item');
 
-    res.json({ success: true, trends: results });
+      return {
+        id: name,
+        name: name,
+        weapon: itemInfo?.item?.weapon || name.split(' | ')[0],
+        skin: itemInfo?.item?.skin || name.split(' | ')[1],
+        price: currentPrice, // ส่งเป็นตัวเลขดิบเพื่อให้ Frontend ไป format เอง
+        trend: trendValue.toFixed(2), // เปอร์เซ็นต์การขึ้นลง (เช่น 5.40 หรือ -2.10)
+        isUp: trendValue >= 0,
+        image: itemInfo?.item?.image || "https://community.cloudflare.steamstatic.com/economy/image/fWFc82js0fmoRAP-qOIPu5THSWqfSmTELLqcUywGkijVjZULUrsm1j-9xgEYOwEUVmKFSz-wL5KFqC0bCGXvtCREfmBs_XYAA2JajjQGODeKz-asMiUmF-2wNygVPLQqgYMm0oV79HH0zbtxMpVW/360fx360f",
+        rarityColor: itemInfo?.item?.rarityColor || "#4B69FF"
+      };
+    }));
+
+    // กรองค่า null ออก (กรณีหาประวัติไม่เจอ)
+    const finalTrends = trends.filter(t => t !== null);
+
+    res.json({ 
+      success: true, 
+      trends: finalTrends 
+    });
 
   } catch (err) {
     console.error("❌ Trends API Error:", err);
