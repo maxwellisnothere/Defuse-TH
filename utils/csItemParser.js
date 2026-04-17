@@ -15,7 +15,6 @@ const RARITY_COLORS = {
   'Base Grade': '#B0C3D9',
 };
 
-// 🔥 เพิ่ม WEAR_MAP เข้ามาตรงนี้ครับ
 const WEAR_MAP = {
   'Factory New': 'FN',
   'Minimal Wear': 'MW',
@@ -37,7 +36,7 @@ const parseItem = (asset, description, steamId) => {
 
   const name = description.market_hash_name || description.name || 'Unknown';
 
-  // แยกชื่อ
+  // แยกชื่อ Weapon และ Skin
   const parts = name.split(' | ');
   const weapon = parts[0]?.replace('StatTrak™ ', '').replace('Souvenir ', '').trim() || name;
   const skinRaw = parts[1] || '';
@@ -46,11 +45,12 @@ const parseItem = (asset, description, steamId) => {
   const isStatTrak = name.includes('StatTrak™');
   const isSouvenir = name.includes('Souvenir');
 
-  const imageUrl = description.icon_url
-    ? `https://community.cloudflare.steamstatic.com/economy/image/${description.icon_url}/360fx360f`
-    : null;
+  // เปลี่ยนบรรทัด imageUrl ใน parseItem ให้เป็นอันนี้ครับ
+const imageUrl = description.icon_url
+  ? `https://steamcommunity-a.akamaihd.net/economy/image/${description.icon_url}/360fx360f`
+  : null;
 
-  // 🔥 ลอจิก INSPECT LINK
+  // ลอจิก INSPECT LINK
   let inspectLink = null;
   if (description.actions && description.actions.length > 0) {
     inspectLink = description.actions[0].link
@@ -58,18 +58,21 @@ const parseItem = (asset, description, steamId) => {
       ?.replace('%assetid%', asset.assetid);
   }
 
-  // 🎯 ลอจิก STICKERS (ทำความสะอาด HTML)
+  // ลอจิก STICKERS
   const stickers = description.descriptions
     ?.filter(d => d.value?.includes('Sticker:'))
     ?.map(d => d.value.replace(/<[^>]*>?/gm, '').trim()) || []; 
 
-  // หมวดหมู่
+  // จัดหมวดหมู่ (Category)
   let category = 'Guns';
-  if (name.includes('Gloves') || name.includes('Wraps')) category = 'Glove';
-  else if (['Knife', 'Karambit', 'Bayonet', 'Butterfly', 'Falchion', 'Flip', 'Gut ', 'Huntsman', 'M9 ', 'Navaja', 'Shadow', 'Stiletto', 'Talon', 'Ursus'].some(k => name.includes(k))) category = 'Knife';
-  else if (['Case', 'Capsule', 'Package', 'Sticker', 'Graffiti', 'Patch', 'Music Kit'].some(k => name.includes(k))) category = 'Cases';
+  if (name.includes('Gloves') || name.includes('Wraps')) {
+    category = 'Glove';
+  } else if (['Knife', 'Karambit', 'Bayonet', 'Butterfly', 'Falchion', 'Flip', 'Gut', 'Huntsman', 'M9', 'Navaja', 'Shadow', 'Stiletto', 'Talon', 'Ursus'].some(k => name.includes(k))) {
+    category = 'Knife';
+  } else if (['Case', 'Capsule', 'Package', 'Sticker', 'Graffiti', 'Patch', 'Music Kit'].some(k => name.includes(k))) {
+    category = 'Cases';
+  }
 
-  // คืนค่ารูปแบบที่พร้อมใช้งาน
   return {
     assetId: asset.assetid,
     name: name,
@@ -96,7 +99,6 @@ const parseItem = (asset, description, steamId) => {
   };
 };
 
-// 🔥 บรรทัดนี้สำคัญมาก! ส่งออกเพื่อให้ไฟล์อื่นดึงไปใช้ได้
 module.exports = {
   CS2_APP_ID,
   CS2_CONTEXT_ID,

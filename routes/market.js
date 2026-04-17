@@ -6,6 +6,7 @@ const Order   = require('../models/Order');
 const User    = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Withdrawal = require('../models/Withdrawal');
+const PriceHistory = require('../models/PriceHistory'); // 🟢 1. ดึงโมเดล PriceHistory มาใช้งาน
 const io = require('../utils/socket'); 
 
 const JWT_SECRET = process.env.JWT_SECRET || 'defuse_th_jwt_2024';
@@ -136,13 +137,11 @@ router.delete('/list/:listingId', async (req, res) => {
   }
 });
 
-// ── POST /market/buy/:listingId ──
 router.post('/buy/:listingId', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
 
   try {
-    // ✅ 1. หารายการขายให้เจอ
     const listing = await Listing.findOne({
       listingId: req.params.listingId,
       status: 'active',
@@ -150,29 +149,24 @@ router.post('/buy/:listingId', async (req, res) => {
 
     if (!listing) return res.status(404).json({ error: 'ไม่พบรายการหรือถูกขายไปแล้ว' });
     
-    // ✅ 2. ห้ามซื้อของตัวเอง
     if (listing.sellerId === user.steamId) {
       return res.status(400).json({ error: 'ไม่สามารถซื้อไอเทมของตัวเองได้' });
     }
 
-    // ✅ 3. เช็คเงินผู้ซื้อ
     const buyer = await User.findOne({ steamId: user.steamId });
     if (!buyer || buyer.balance < listing.price) {
       return res.status(400).json({ error: 'ยอดเงินของคุณไม่เพียงพอ' });
     }
 
-    // ✅ 4. อัปเดตสถานะให้เป็น sold
     listing.status = 'sold';
     listing.soldAt = new Date();
     await listing.save();
 
-    // ✅ 5. หักเงินผู้ซื้อทันที
     await User.findOneAndUpdate(
       { steamId: user.steamId },
       { $inc: { balance: -listing.price } }
     );
 
-    // ✅ 6. สร้าง Order (ใช้ชื่อจาก Listing ถ้าหาผู้ขายไม่เจอ)
     const order = new Order({
       orderId:       `ORD-${Date.now()}`,
       listingId:     listing.listingId,
@@ -188,7 +182,6 @@ router.post('/buy/:listingId', async (req, res) => {
     });
     await order.save();
     
-    // 🟢 แจ้งเตือนคนขาย
     if (io && io.getIO) {
         try {
             io.getIO().to(listing.sellerId).emit('tradeNotification', {
@@ -358,8 +351,6 @@ router.post('/withdraw', async (req, res) => {
   }
 });
 
-
-// ── GET /market/orders/buy (ประวัติการซื้อของฉัน) ──
 router.get('/orders/buy', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
@@ -371,12 +362,10 @@ router.get('/orders/buy', async (req, res) => {
   }
 });
 
-// ── GET /market/orders/sell (ประวัติการขายของฉัน) ──
 router.get('/orders/sell', async (req, res) => {
   const user = verifyToken(req);
   if (!user) return res.status(401).json({ error: 'กรุณา Login ก่อน' });
   try {
-    // ดึงออเดอร์ที่คนอื่นกดซื้อของๆ เราไป
     const orders = await Order.find({ sellerId: user.steamId }).sort({ createdAt: -1 });
     res.json({ success: true, orders });
   } catch (err) {
@@ -384,5 +373,49 @@ router.get('/orders/sell', async (req, res) => {
   }
 });
 
+// 🟢 2. เพิ่ม Route สำหรับดึงเทรนด์ตลาดตรงนี้
+// ── GET /market/trends (สำหรับแสดงหน้า Home) ──────────────────
+router.get('/trends', async (req, res) => {
+  try {
+    const trendItems = [
+      "AK-47 | Redline (Field-Tested)",
+      "AWP | Asiimov (Well-Worn)",
+      "M4A1-S | Printstream (Minimal Wear)"
+    ];
+
+    const results = [];
+
+    for (const itemName of trendItems) {
+      const latestPrice = await PriceHistory.findOne({ itemName }).sort({ recordedAt: -1 });
+      
+      if (!latestPrice) {
+        results.push({
+          id: itemName,
+          name: itemName,
+          price: "฿ 0.00",
+          change: "กำลังอัปเดต",
+          isUp: true,
+          image: "https://steamcommunity-a.akamaihd.net/economy/image/-9a81dlWLwJ2UUGcVs_nsVtzdOEdtWwKGZZLQHTxDZ7I56KU0Zwwo4NUX4oFJZEHLbXH5ApeO4YmlhxYQknCRvCo04DEVlxkKgpot7HxfDhjxszJemkV092lnYmGmOHLPr7Vn35cppQiiu-UoI_zi1Hk-xA9N2ilcNOXIwM-MF7U_wK9wuy8h8Di_r_rwwXg__Bz/200fx185f"
+        });
+        continue;
+      }
+
+      results.push({
+        id: itemName,
+        name: itemName,
+        price: `฿ ${latestPrice.price.toLocaleString('th-TH', { minimumFractionDigits: 2 })}`,
+        change: "รอคำนวณพรุ่งนี้", 
+        isUp: true,
+        image: "https://steamcommunity-a.akamaihd.net/economy/image/-9a81dlWLwJ2UUGcVs_nsVtzdOEdtWwKGZZLQHTxDZ7I56KU0Zwwo4NUX4oFJZEHLbXH5ApeO4YmlhxYQknCRvCo04DEVlxkKgpot7HxfDhjxszJemkV092lnYmGmOHLPr7Vn35cppQiiu-UoI_zi1Hk-xA9N2ilcNOXIwM-MF7U_wK9wuy8h8Di_r_rwwXg__Bz/200fx185f"
+      });
+    }
+
+    res.json({ success: true, trends: results });
+
+  } catch (err) {
+    console.error("❌ Trends API Error:", err);
+    res.status(500).json({ success: false, error: "ไม่สามารถดึงข้อมูลเทรนด์ตลาดได้" });
+  }
+});
 
 module.exports = router;

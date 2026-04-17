@@ -6,11 +6,8 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 const JWT_SECRET = process.env.JWT_SECRET || "defuse_th_jwt_2024";
+const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
-// ✅ ใช้ URL จริงของ Server (สำคัญมากสำหรับการทำ Redirect)
-const BASE_URL = process.env.BASE_URL || "http://10.0.2.2:3000";
-
-// ── Passport Steam Strategy ────────────────────────────
 passport.use(
   new SteamStrategy(
     {
@@ -21,15 +18,11 @@ passport.use(
     async (identifier, profile, done) => {
       try {
         const steamId = profile.id;
-        
-        // 🌟 ดึงรูปภาพขนาดใหญ่ที่สุด (avatarfull) จากก้อนข้อมูลดิบ (_json)
-        const avatarUrl = profile._json?.avatarfull || 
-                          profile.photos?.[2]?.value || 
-                          profile.photos?.[0]?.value || "";
+        const avatarUrl = profile._json?.avatarfull || profile.photos?.[2]?.value || "";
 
-        // อัปเดตข้อมูลผู้ใช้ หรือสร้างใหม่ถ้ายังไม่มี (Upsert)
+        // 🟢 ใช้ return เพื่อให้จบฟังก์ชันแน่นอนหลังเรียก done
         const result = await User.findOneAndUpdate(
-          { steamId },
+          { steamId }, 
           {
             $set: {
               displayName: profile.displayName,
@@ -37,13 +30,9 @@ passport.use(
               profileUrl: profile._json?.profileurl || "",
               lastLogin: new Date(),
             },
-            $setOnInsert: {
-              steamId,
-              balance: 0,
-              inventory: [],
-            },
+            $setOnInsert: { steamId, balance: 0, inventory: [] },
           },
-          { upsert: true, new: true } // ใช้ new: true เพื่อคืนค่าข้อมูลที่อัปเดตแล้ว
+          { upsert: true, new: true }
         );
 
         console.log("✅ User DB Updated:", result?.steamId);
@@ -56,80 +45,72 @@ passport.use(
   )
 );
 
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((user, done) => done(null, user));
-
-// ── GET /auth/steam (ทางเข้าการ Login) ──────────────────
+// ── GET /auth/steam ──────────────────
 router.get("/steam", (req, res, next) => {
-  // รับค่า redirect แฝงมาเพื่อส่งต่อกลับไปยังแอป
   const redirectUri = req.query.redirect || "myapp://auth/callback";
-  
-  // encode redirect ไปใน state ของ OpenID
   const state = Buffer.from(redirectUri).toString("base64");
 
-  passport.authenticate("steam", {
-    session: false,
-    state,
-  })(req, res, next);
+  // 🟢 Passport-Steam ต้องการ session ในการทำงานของ OpenID 
+  // แม้เราจะใช้ JWT เราก็ควรปล่อยให้ Passport ใช้ session ชั่วคราวไปก่อน
+  passport.authenticate("steam", { state })(req, res, next);
 });
 
-// ── GET /auth/steam/return (ขากลับจาก Steam) ──────────────
+// ── GET /auth/steam/return ──────────────
 router.get(
   "/steam/return",
-  passport.authenticate("steam", {
-    failureRedirect: `${BASE_URL}/auth/failed`,
-    session: false,
-  }),
-  async (req, res) => {
-    try {
-      const steamUser = req.user;
-      const avatarUrl = steamUser._json?.avatarfull || ""; // ดึงรูปภาพขนาดเต็ม
-
-      // ค่าเริ่มต้นสำหรับ Redirect กลับไปที่มือถือ
-      let redirectUri = "myapp://auth/callback";
-
-      // decode state เพื่อดูว่าต้องยิงกลับไปที่ URL ไหน
-      if (req.query.state) {
-        try {
-          redirectUri = Buffer.from(req.query.state, "base64").toString("utf-8");
-        } catch (e) {
-          console.log("❌ decode state error:", e);
-        }
+  // 🟢 ถอด failureRedirect ออกจาก middleware เพื่อมาจัดการเองข้างล่างให้ชัวร์กว่า
+  (req, res, next) => {
+    passport.authenticate("steam", (err, user, info) => {
+      if (err || !user) {
+        console.error("❌ Steam Auth Failed:", err || "No user found");
+        return res.redirect(`${BASE_URL}/auth/failed`);
       }
 
-      // 🌟 สร้าง JWT Token โดยแนบข้อมูลสำคัญลงไปด้วย
-      const token = jwt.sign(
-        {
-          steamId: steamUser.id,
-          displayName: steamUser.displayName,
-          avatar: avatarUrl, 
-        },
-        JWT_SECRET,
-        { expiresIn: "7d" }
-      );
+      // 🟢 ทำงานต่อในรูปแบบ async 
+      (async () => {
+        try {
+          const steamUser = user;
+          const avatarUrl = steamUser._json?.avatarfull || "";
+          let redirectUri = "myapp://auth/callback";
 
-      // 🌟 ประกอบ URL สำหรับ Deep Link กลับเข้าแอป
-      // แนบข้อมูลไปใน Query Params เพื่อให้ Frontend เก็บลง AsyncStorage ได้ทันที
-      const appUrl =
-        `${redirectUri}` +
-        `?token=${token}` +
-        `&steamId=${steamUser.id}` +
-        `&name=${encodeURIComponent(steamUser.displayName)}` +
-        `&avatar=${encodeURIComponent(avatarUrl)}`; 
+          if (req.query.state) {
+            try {
+              redirectUri = Buffer.from(req.query.state, "base64").toString("utf-8");
+            } catch (e) {
+              console.log("❌ decode state error:", e);
+            }
+          }
 
-      console.log("✅ Redirecting with Auth Data:", appUrl);
-      return res.redirect(appUrl);
-    } catch (err) {
-      console.error("❌ ERROR:", err);
-      return res.status(500).send("Server Error");
-    }
+          const token = jwt.sign(
+            { steamId: steamUser.id, displayName: steamUser.displayName, avatar: avatarUrl },
+            JWT_SECRET,
+            { expiresIn: "7d" }
+          );
+
+          const appUrl = `${redirectUri}?token=${token}&steamId=${steamUser.id}&name=${encodeURIComponent(steamUser.displayName)}&avatar=${encodeURIComponent(avatarUrl)}`;
+
+          console.log("✅ Auth Success, Redirecting...");
+          
+          // 🟢 ตรวจสอบว่าหัวข้อมูลยังไม่ถูกส่งไปก่อนหน้านี้
+          if (!res.headersSent) {
+            return res.redirect(appUrl);
+          }
+        } catch (err) {
+          console.error("❌ Error in Return Route:", err);
+          if (!res.headersSent) {
+            return res.status(500).send("Internal Server Error");
+          }
+        }
+      })();
+    })(req, res, next);
   }
 );
 
-// ── GET /auth/failed ───────────────────────────────────
+// ── GET /auth/failed ──────────────────
 router.get("/failed", (req, res) => {
-  console.log("❌ Steam login failed");
-  res.redirect("myapp://auth/callback?error=login_failed");
+  if (!res.headersSent) {
+    return res.redirect("myapp://auth/callback?error=login_failed");
+  }
 });
 
 // ── POST /auth/mock-login (สำหรับทดสอบ) ──────────────────
